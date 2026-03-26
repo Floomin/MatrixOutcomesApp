@@ -3,3 +3,4 @@ pyodbc
 pandas
 bcrypt
 st-annotated-text
+openpyxl

@@ -1,4 +1,6 @@
 import streamlit as st
+from navigation import show_nav
+show_nav()
 import pandas as pd
 from datetime import datetime
 from database.connection import execute_query
@@ -246,35 +248,45 @@ else:
     
     # 1. Нові
     with tabs[0]:
-        if f_new.empty: st.info("Не знайдено договорів.")
-        for owner, group in f_new.groupby('CounterpartyName'):
-            with st.expander(f"👤 {owner} ({len(group)})"):
-                for _, row in group.iterrows(): render_contract_card(row, row['AgreementUID'], row.get('ContractNumber', 'Б/Н'), owner, "new")
+        if f_new.empty: 
+            st.info("Не знайдено договорів.")
+        else:
+            for owner, group in f_new.groupby('CounterpartyName'):
+                with st.expander(f"👤 {owner} ({len(group)})"):
+                    for _, row in group.iterrows(): render_contract_card(row, row['AgreementUID'], row.get('ContractNumber', 'Б/Н'), owner, "new")
 
     # 2. Залишається
     with tabs[1]:
-        if f_done_stay.empty: st.info("Не знайдено договорів.")
-        for owner, group in f_done_stay.groupby('CounterpartyName'):
-            with st.expander(f"👤 {owner} (Залишається: {len(group)})"):
-                for _, row in group.iterrows(): render_contract_card(row, row['AgreementUID'], row.get('ContractNumber', 'Б/Н'), owner, "done")
+        if f_done_stay.empty: 
+            st.info("Не знайдено договорів.")
+        else:
+            for owner, group in f_done_stay.groupby('CounterpartyName'):
+                with st.expander(f"👤 {owner} (Залишається: {len(group)})"):
+                    for _, row in group.iterrows(): render_contract_card(row, row['AgreementUID'], row.get('ContractNumber', 'Б/Н'), owner, "done")
 
     # 3. Вихід
     with tabs[2]:
-        if f_done_out.empty: st.info("Не знайдено договорів.")
-        for owner, group in f_done_out.groupby('CounterpartyName'):
-            with st.expander(f"👤 {owner} (Вихід: {len(group)})"):
-                for _, row in group.iterrows(): render_contract_card(row, row['AgreementUID'], row.get('ContractNumber', 'Б/Н'), owner, "done")
+        if f_done_out.empty: 
+            st.info("Не знайдено договорів.")
+        else:
+            for owner, group in f_done_out.groupby('CounterpartyName'):
+                with st.expander(f"👤 {owner} (Вихід: {len(group)})"):
+                    for _, row in group.iterrows(): render_contract_card(row, row['AgreementUID'], row.get('ContractNumber', 'Б/Н'), owner, "done")
 
     # 4. Резерв
     with tabs[3]:
-        if f_done_res.empty: st.info("Не знайдено договорів.")
-        for owner, group in f_done_res.groupby('CounterpartyName'):
-            with st.expander(f"👤 {owner} (Резерв: {len(group)})"):
-                for _, row in group.iterrows(): render_contract_card(row, row['AgreementUID'], row.get('ContractNumber', 'Б/Н'), owner, "done")
+        if f_done_res.empty: 
+            st.info("Не знайдено договорів.")
+        else:
+            for owner, group in f_done_res.groupby('CounterpartyName'):
+                with st.expander(f"👤 {owner} (Резерв: {len(group)})"):
+                    for _, row in group.iterrows(): render_contract_card(row, row['AgreementUID'], row.get('ContractNumber', 'Б/Н'), owner, "done")
                 
     # 5. Редагування
     with tabs[4]:
-        if f_edit.empty: st.info("Немає договорів, доступних для редагування.")
-        for owner, group in f_edit.groupby('CounterpartyName'):
-            with st.expander(f"👤 {owner} (Дозволено: {len(group)})"):
-                for _, row in group.iterrows(): render_contract_card(row, row['AgreementUID'], row.get('ContractNumber', 'Б/Н'), owner, "edit")
+        if f_edit.empty: 
+            st.info("Немає договорів, доступних для редагування.")
+        else:
+            for owner, group in f_edit.groupby('CounterpartyName'):
+                with st.expander(f"👤 {owner} (Дозволено: {len(group)})"):
+                    for _, row in group.iterrows(): render_contract_card(row, row['AgreementUID'], row.get('ContractNumber', 'Б/Н'), owner, "edit")

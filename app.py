@@ -1,4 +1,6 @@
 import streamlit as st
+from navigation import show_nav
+show_nav()
 from core.auth import login_user, update_password
 
 # Настройка страницы (должна быть первой командой Streamlit)

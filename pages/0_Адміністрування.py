@@ -1,4 +1,6 @@
 import streamlit as st
+from navigation import show_nav
+show_nav()
 import pandas as pd
 import bcrypt
 from database.connection import execute_query
