@@ -3,223 +3,278 @@ import pandas as pd
 from datetime import datetime
 from database.connection import execute_query
 
-# === 1. ЗАХИСТ СТОРІНКИ ===
 if not st.session_state.get('logged_in') or st.session_state.get('user_role') not in ['Manager', 'Admin']:
-    st.error("🚫 Доступ заборонено. Будь ласка, авторизуйтесь як Менеджер.")
+    st.error("🚫 Доступ заборонено.")
     st.stop()
 
-# === 2. ФУНКЦІЇ ДЛЯ ОТРИМАННЯ ДАНИХ ===
 @st.cache_data(ttl=60)
-def get_unprocessed_contracts(user_id):
+def get_contracts(user_id):
     query = """
-        SELECT m.*
+        SELECT m.*, r.ResultID, r.Outcome, r.ExitOrder, r.CompetitorName, r.ContactType, 
+               r.ContactInfo, r.Comment, r.IsConflict, r.ProcessingStatus, r.UpdatedAt, r.IsLocked,
+               (SELECT TOP 1 eq.Status FROM tbl_EditRequests eq WHERE eq.ResultID = r.ResultID ORDER BY eq.RequestDate DESC) AS LastRequestStatus,
+               (SELECT TOP 1 eq.AdminComment FROM tbl_EditRequests eq WHERE eq.ResultID = r.ResultID ORDER BY eq.RequestDate DESC) AS AdminComment
         FROM tbl_MainRegistry m
         INNER JOIN tbl_User_Villages v ON m.Village = v.VillageName AND v.UserID = ?
         LEFT JOIN tbl_Manager_Results r ON m.AgreementUID = r.AgreementUID 
-             AND (r.ProcessingStatus = 'Submitted' OR r.ProcessingStatus = 'Reserve')
-        WHERE r.ResultID IS NULL
     """
     data = execute_query(query, (user_id,))
     return pd.DataFrame(data) if data else pd.DataFrame()
 
-def get_processed_contracts(user_id):
-    query = """
-        SELECT m.CounterpartyName, m.CadastralNumber, r.Outcome, r.ProcessingStatus, r.UpdatedAt
-        FROM tbl_Manager_Results r
-        INNER JOIN tbl_MainRegistry m ON r.AgreementUID = m.AgreementUID
-        WHERE r.ManagerID = ?
-    """
-    data = execute_query(query, (user_id,))
-    return pd.DataFrame(data) if data else pd.DataFrame()
-
-def reset_filters_on_search():
+def reset_filters():
     if st.session_state.get('search_query_input'):
-        st.session_state['filter_year'] = "Всі"
-        st.session_state['filter_month'] = "Всі"
-        st.session_state['filter_village'] = "Всі"
+        for key in ['filter_year', 'filter_month', 'filter_village', 'filter_field', 'filter_crop']:
+            if key in st.session_state: st.session_state[key] = "Всі"
 
-# === 3. ГОЛОВНИЙ ІНТЕРФЕЙС ===
-st.title("💼 Робоче місце менеджера")
+def clear_process_session():
+    keys_to_clear = ['process_contract_uid', 'process_contract_num', 'process_owner', 'edit_mode', 'edit_result_id', 'edit_data']
+    for k in keys_to_clear:
+        if k in st.session_state: del st.session_state[k]
 
-user_id = st.session_state['user_id']
-df_new = get_unprocessed_contracts(user_id)
+def request_edit(result_id, reason):
+    q_req = "INSERT INTO tbl_EditRequests (ResultID, ManagerID, RequestReason) VALUES (?, ?, ?)"
+    execute_query(q_req, (result_id, st.session_state['user_id'], reason), fetch=False)
+    q_res = "UPDATE tbl_Manager_Results SET ProcessingStatus = 'EditRequest' WHERE ResultID = ?"
+    execute_query(q_res, (result_id,), fetch=False)
+    st.toast("✅ Запит на редагування відправлено!")
+    get_contracts.clear()
 
-# Якщо в сесії НЕМАЄ вибраного договору, показуємо списки і фільтри
-if 'process_contract_uid' not in st.session_state:
+def render_contract_card(row, uid, contract_num, owner, tab_type):
+    st.markdown(f"#### 📄 Договір: :green[{contract_num}]")
     
-    tab_new, tab_done = st.tabs(["🆕 Необроблені договори", "✅ Оброблені договори"])
-
-    with tab_new:
-        if df_new.empty:
-            st.success("🎉 Усі договори оброблено! Завдань немає.")
-        else:
-            df_new['ExpiryDate'] = pd.to_datetime(df_new['ExpiryDate'])
-            df_new['Рік'] = df_new['ExpiryDate'].dt.year.astype(str)
-            df_new['Місяць'] = df_new['ExpiryDate'].dt.month.astype(str).str.zfill(2)
-
-            current_year = str(datetime.now().year)
-            current_month = str(datetime.now().month).zfill(2)
-
-            years = ["Всі"] + sorted(df_new['Рік'].unique().tolist())
-            months = ["Всі"] + sorted(df_new['Місяць'].unique().tolist())
-            villages = ["Всі"] + sorted(df_new['Village'].unique().tolist())
-
-            if 'filter_year' not in st.session_state:
-                st.session_state['filter_year'] = current_year if current_year in years else "Всі"
-            if 'filter_month' not in st.session_state:
-                st.session_state['filter_month'] = current_month if current_month in months else "Всі"
-            if 'filter_village' not in st.session_state:
-                st.session_state['filter_village'] = "Всі"
-
-            col_metric, col_search = st.columns([1, 3])
-            with col_metric:
-                st.metric("Всього необроблених", len(df_new))
-            with col_search:
-                search_query = st.text_input("🔍 Швидкий пошук", key="search_query_input", on_change=reset_filters_on_search)
-
-            st.write("### Фільтри")
-            col1, col2, col3 = st.columns(3)
-            with col1:
-                selected_year = st.selectbox("Рік закінчення", years, key="filter_year")
-            with col2:
-                selected_month = st.selectbox("Місяць закінчення", months, key="filter_month")
-            with col3:
-                selected_village = st.selectbox("Село", villages, key="filter_village")
-
-            filtered_df = df_new.copy()
-            if search_query:
-                search_query = search_query.lower()
-                filtered_df = filtered_df[
-                    filtered_df['CounterpartyName'].str.lower().str.contains(search_query, na=False) |
-                    filtered_df['CadastralNumber'].str.contains(search_query, na=False)
-                ]
-                st.info("⚠️ Активний пошук: фільтри тимчасово вимкнено.")
-            else:
-                if selected_year != "Всі":
-                    filtered_df = filtered_df[filtered_df['Рік'] == selected_year]
-                if selected_month != "Всі":
-                    filtered_df = filtered_df[filtered_df['Місяць'] == selected_month]
-                if selected_village != "Всі":
-                    filtered_df = filtered_df[filtered_df['Village'] == selected_village]
-
-            st.divider()
-
-            if filtered_df.empty:
-                st.warning("За обраними критеріями нічого не знайдено.")
-            else:
-                grouped = filtered_df.groupby('CounterpartyName')
-                for owner, group in grouped:
-                    with st.expander(f"👤 {owner} (Договорів: {len(group)})"):
-                        
-                        for index, row in group.iterrows():
-                            uid = row['AgreementUID']
-                            contract_num = row.get('ContractNumber', 'Б/Н')
-                            
-                            st.markdown(f"#### 📄 Договір: :green[{contract_num}]")
-                            
-                            col_a, col_b = st.columns(2)
-                            with col_a:
-                                st.markdown(f"**Кадастровий номер:** :green[{row.get('CadastralNumber', '')}]")
-                                st.markdown(f"**Площа:** :green[{row.get('Area', 0)} га]")
-                                st.markdown(f"**Село:** :green[{row.get('Village', '')}]")
-                                
-                                expiry = row.get('ExpiryDate')
-                                if pd.notnull(expiry):
-                                    expiry_str = expiry[:10] if isinstance(expiry, str) else expiry.strftime('%d.%m.%Y')
-                                    st.markdown(f"**Закінчення оренди:** ⏳ :green[{expiry_str}]")
-                            
-                            with col_b:
-                                st.markdown(f"**Поле:** :green[{row.get('FieldNumber', '')}]")
-                                st.markdown(f"**Культура '25:** :green[{row.get('Crop2025', '')}]")
-                                st.markdown(f"**Культура '26:** :green[{row.get('Crop2026', '')}]")
-                                st.markdown(f"**Статус:** :green[{row.get('Condition', '')}] / :green[{row.get('PlotStatus', '')}]")
-                            
-                            with st.expander("Деталі"):
-                                st.markdown(f"**Вид договору:** :green[{row.get('ContractType', '')}]")
-                                st.markdown(f"**Вид ділянки:** :green[{row.get('LandPlotType', '')}]")
-                                st.markdown(f"**Пай:** :green[{row.get('ShareCount', '')}]")
-                                
-                            # Кнопка тепер індивідуальна для КОЖНОГО договору
-                            if st.button(f"✍️ Опрацювати договір {contract_num}", key=f"btn_{uid}"):
-                                st.session_state['process_contract_uid'] = uid
-                                st.session_state['process_contract_num'] = contract_num
-                                st.session_state['process_owner'] = owner
-                                st.rerun()
-                                
-                            st.markdown("---")
-
-    with tab_done:
-        df_done = get_processed_contracts(user_id)
-        if df_done.empty:
-            st.info("Ви ще не обробили жодного договору.")
-        else:
-            st.dataframe(df_done, hide_index=True, use_container_width=True)
-
-# === 4. ФОРМА ОБРОБКИ (Відображається замість списків) ===
-else:
-    st.subheader("📝 Внесення результатів")
-    st.markdown(f"Пайовик: **:green[{st.session_state['process_owner']}]**")
-    st.markdown(f"Договір №: **:green[{st.session_state['process_contract_num']}]**")
+    if tab_type != "new":
+        outcome_color = "green" if row['Outcome'] == "Залишається" else "red" if row['Outcome'] == "Вилучається" else "orange"
+        st.markdown(f"**Результат:** :{outcome_color}[{row['Outcome']}]")
     
+    col_a, col_b = st.columns(2)
+    with col_a:
+        st.markdown(f"**Кадастровий:** :green[{row.get('CadastralNumber', '')}] | **Площа:** :green[{row.get('Area', 0)} га]")
+        st.markdown(f"**Село:** :green[{row.get('Village', '')}]")
+        expiry = row.get('ExpiryDate')
+        expiry_str = expiry[:10] if isinstance(expiry, str) else expiry.strftime('%d.%m.%Y') if pd.notnull(expiry) else ""
+        st.markdown(f"**Закінчення:** ⏳ :green[{expiry_str}]")
+        
+    with col_b:
+        st.markdown(f"**Поле:** :green[{row.get('FieldNumber', '')}] | **Статус:** :green[{row.get('PlotStatus', '')}]")
+        st.markdown(f"**Культури:** '25: :green[{row.get('Crop2025', '')}] | '26: :green[{row.get('Crop2026', '')}]")
+        
+    with st.expander("Деталі"):
+        st.markdown(f"**Вид:** :green[{row.get('ContractType', '')}] | **Пай:** :green[{row.get('ShareCount', '')}]")
+        
+    if tab_type == "new":
+        if st.button(f"✍️ Опрацювати", key=f"btn_{uid}"):
+            st.session_state.update({'process_contract_uid': uid, 'process_contract_num': contract_num, 'process_owner': owner, 'edit_mode': False})
+            st.rerun()
+            
+    elif tab_type == "done":
+        status = row['ProcessingStatus']
+        if status == 'EditRequest':
+            st.warning("⏳ Очікує дозволу на редагування від адміністратора")
+        else:
+            if row.get('LastRequestStatus') == 'Rejected':
+                st.error(f"❌ Запит відхилено. Причина: {row.get('AdminComment', 'Без коментарів')}")
+                
+            if st.button("🔓 Запросити редагування", key=f"req_{row['ResultID']}"):
+                st.session_state[f'requesting_for_{row["ResultID"]}'] = True
+                st.rerun()
+                
+            if st.session_state.get(f'requesting_for_{row["ResultID"]}'):
+                reason = st.text_input("Вкажіть причину редагування (обов'язково):", key=f"reason_{row['ResultID']}")
+                col1, col2 = st.columns(2)
+                if col1.button("Відправити", key=f"send_req_{row['ResultID']}", type="primary"):
+                    if reason:
+                        request_edit(row['ResultID'], reason)
+                        del st.session_state[f'requesting_for_{row["ResultID"]}']
+                        st.rerun()
+                    else:
+                        st.error("Введіть причину!")
+                if col2.button("Скасувати", key=f"cancel_req_{row['ResultID']}"):
+                    del st.session_state[f'requesting_for_{row["ResultID"]}']
+                    st.rerun()
+                    
+    elif tab_type == "edit":
+        if st.button("📝 Редагувати дані", key=f"edit_btn_{uid}"):
+            st.session_state.update({
+                'process_contract_uid': uid, 
+                'process_contract_num': contract_num, 
+                'process_owner': owner, 
+                'edit_mode': True, 
+                'edit_result_id': row['ResultID'],
+                'edit_data': row 
+            })
+            st.rerun()
+            
+    st.markdown("---")
+
+def render_processing_form():
+    is_edit = st.session_state.get('edit_mode', False)
+    row_data = st.session_state.get('edit_data', {})
+    
+    st.subheader("📝 Редагування результатів" if is_edit else "📝 Внесення результатів")
+    st.markdown(f"Пайовик: **:green[{st.session_state['process_owner']}]** | Договір: **:green[{st.session_state['process_contract_num']}]**")
+    
+    def get_idx(options, val): return options.index(val) if pd.notna(val) and val in options else 0
+    def get_str(val): return str(val) if pd.notna(val) else ""
+    def get_bool(val): return bool(val) if pd.notna(val) else False
+
+    outcomes = ["", "Залишається", "Вилучається", "Резервується"]
+    exit_orders = ["Одноосібно на своєму місці", "Одноосібно обмін", "Конкурент"]
+    contact_types = ["Дзвінок", "Зустріч", "Месенджер", "Не вдалося зв'язатися"]
+
     with st.container(border=True):
         col1, col2 = st.columns(2)
-        
         with col1:
-            outcome = st.selectbox("Результат переговорів *", ["", "Залишається", "Вилучається", "Резервується"])
-            
-            exit_order = ""
-            competitor = ""
-            if outcome == "Вилучається":
-                exit_order = st.selectbox("Порядок виходу", ["Одноосібно на своєму місці", "Одноосібно обмін", "Конкурент"])
-                if exit_order == "Конкурент":
-                    competitor = st.text_input("Назва конкурента")
-            
-            is_conflict = st.checkbox("⚠️ Конфліктний пайовик")
+            outcome = st.selectbox("Результат *", outcomes, index=get_idx(outcomes, row_data.get('Outcome')) if is_edit else 0)
+            exit_order = st.selectbox("Порядок виходу", exit_orders, index=get_idx(exit_orders, row_data.get('ExitOrder')) if is_edit else 0) if outcome == "Вилучається" else ""
+            competitor = st.text_input("Назва конкурента", value=get_str(row_data.get('CompetitorName'))) if exit_order == "Конкурент" else ""
+            is_conflict = st.checkbox("⚠️ Конфліктний пайовик", value=get_bool(row_data.get('IsConflict')))
             
         with col2:
-            contact_type = st.selectbox("Тип контакту", ["Дзвінок", "Зустріч", "Месенджер", "Не вдалося зв'язатися"])
-            contact_info = st.text_input("Контактні дані", placeholder="+380...")
-            comment = st.text_area("Коментар", placeholder="Деталі розмови...")
+            contact_type = st.selectbox("Тип контакту", contact_types, index=get_idx(contact_types, row_data.get('ContactType')) if is_edit else 0)
+            contact_info = st.text_input("Контакти", value=get_str(row_data.get('ContactInfo')), placeholder="+380...")
+            comment = st.text_area("Коментар", value=get_str(row_data.get('Comment')))
         
-        st.markdown("---")
-        col_btn1, col_btn2 = st.columns([1, 1])
+        col_btn1, col_btn2 = st.columns(2)
+        btn_text = "💾 Оновити результати" if is_edit else "💾 Зберегти"
         
-        with col_btn1:
-            if st.button("💾 Зберегти результати", type="primary", use_container_width=True):
-                if not outcome:
-                    st.error("Будь ласка, оберіть 'Результат переговорів'.")
-                else:
-                    manager_id = st.session_state['user_id']
-                    processing_status = "Reserve" if outcome == "Резервується" else "Submitted"
-                    uid = st.session_state['process_contract_uid']
-                    
-                    query = """
-                        INSERT INTO tbl_Manager_Results 
-                        (AgreementUID, ManagerID, Outcome, ExitOrder, CompetitorName, 
-                         ContactType, ContactInfo, Comment, IsConflict, ProcessingStatus, IsLocked)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
-                    """
-                    
-                    try:
-                        execute_query(query, (
-                            uid, manager_id, outcome, exit_order, competitor,
-                            contact_type, contact_info, comment, 
-                            1 if is_conflict else 0, processing_status
-                        ), fetch=False)
-                        
-                        st.success(f"✅ Успішно збережено!")
-                        # Очищаємо сесію, щоб форма закрилась і повернувся список
-                        del st.session_state['process_contract_uid']
-                        del st.session_state['process_contract_num']
-                        del st.session_state['process_owner']
-                        get_unprocessed_contracts.clear() # Очищаємо кеш, щоб договір зник зі списку
-                        st.rerun()
-                    except Exception as e:
-                        st.error(f"Помилка при збереженні: {e}")
-                    
-        with col_btn2:
-            if st.button("❌ Скасувати / Повернутись", use_container_width=True):
-                del st.session_state['process_contract_uid']
-                del st.session_state['process_contract_num']
-                del st.session_state['process_owner']
-                st.rerun()
+        if col_btn1.button(btn_text, type="primary", use_container_width=True):
+            if not outcome:
+                st.error("Оберіть 'Результат'.")
+                return
+                
+            status_calc = "Reserve" if outcome == "Резервується" else "Submitted"
+            
+            if is_edit:
+                query = """UPDATE tbl_Manager_Results 
+                           SET Outcome=?, ExitOrder=?, CompetitorName=?, ContactType=?, ContactInfo=?, Comment=?, IsConflict=?, ProcessingStatus=?, IsLocked=1, UpdatedAt=GETDATE()
+                           WHERE ResultID=?"""
+                execute_query(query, (
+                    outcome, exit_order, competitor, contact_type, contact_info, comment, 1 if is_conflict else 0, status_calc, st.session_state['edit_result_id']
+                ), fetch=False)
+                st.success("✅ Дані успішно оновлено!")
+            else:
+                query = """INSERT INTO tbl_Manager_Results 
+                           (AgreementUID, ManagerID, Outcome, ExitOrder, CompetitorName, ContactType, ContactInfo, Comment, IsConflict, ProcessingStatus, IsLocked)
+                           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)"""
+                execute_query(query, (
+                    st.session_state['process_contract_uid'], st.session_state['user_id'], outcome, exit_order, competitor,
+                    contact_type, contact_info, comment, 1 if is_conflict else 0, status_calc
+                ), fetch=False)
+                st.success("✅ Збережено!")
+                
+            clear_process_session()
+            get_contracts.clear()
+            st.rerun()
+                
+        if col_btn2.button("❌ Скасувати", use_container_width=True):
+            clear_process_session()
+            st.rerun()
+
+# === 4. ГОЛОВНИЙ ЦИКЛ ===
+st.title("💼 Робоче місце менеджера")
+
+if 'process_contract_uid' in st.session_state:
+    render_processing_form()
+else:
+    df_all = get_contracts(st.session_state['user_id'])
+    
+    if not df_all.empty:
+        df_all['ExpiryDate'] = pd.to_datetime(df_all['ExpiryDate'])
+        df_all['Рік'] = df_all['ExpiryDate'].dt.year.astype(str)
+        df_all['Місяць'] = df_all['ExpiryDate'].dt.month.astype(str).str.zfill(2)
+        
+        # Розподіл на 5 категорій
+        df_new = df_all[df_all['ResultID'].isna()]
+        df_edit = df_all[df_all['ResultID'].notna() & (df_all['IsLocked'] == 0)]
+        
+        df_done_stay = df_all[df_all['ResultID'].notna() & (df_all['IsLocked'] == 1) & (df_all['Outcome'] == 'Залишається')]
+        df_done_out = df_all[df_all['ResultID'].notna() & (df_all['IsLocked'] == 1) & (df_all['Outcome'] == 'Вилучається')]
+        df_done_res = df_all[df_all['ResultID'].notna() & (df_all['IsLocked'] == 1) & (df_all['Outcome'] == 'Резервується')]
+    else:
+        df_new, df_edit, df_done_stay, df_done_out, df_done_res = [pd.DataFrame()] * 5
+
+    # 5 Метрик в одному ряду
+    cols_m = st.columns(5)
+    cols_m[0].metric("⏳ Нові", len(df_new))
+    cols_m[1].metric("✅ Залишається", len(df_done_stay))
+    cols_m[2].metric("❌ Вихід", len(df_done_out))
+    cols_m[3].metric("⏸️ Резерв", len(df_done_res))
+    cols_m[4].metric("🔓 Редагування", len(df_edit))
+
+    # Пошук окремим рядком для зручності
+    search_q = st.text_input("🔍 Швидкий пошук (ПІБ або Кадастровий)", key="search_query_input", on_change=reset_filters).lower()
+
+    st.write("### Фільтри")
+    cols = st.columns(3)
+    y_val = cols[0].selectbox("Рік", ["Всі"] + sorted(df_all['Рік'].unique().tolist()) if not df_all.empty else ["Всі"], key="filter_year")
+    m_val = cols[1].selectbox("Місяць", ["Всі"] + sorted(df_all['Місяць'].unique().tolist()) if not df_all.empty else ["Всі"], key="filter_month")
+    v_val = cols[2].selectbox("Село", ["Всі"] + sorted(df_all['Village'].dropna().unique().tolist()) if not df_all.empty else ["Всі"], key="filter_village")
+
+    cols2 = st.columns(2)
+    f_val = cols2[0].selectbox("Поле", ["Всі"] + sorted(df_all['FieldNumber'].dropna().unique().tolist()) if not df_all.empty else ["Всі"], key="filter_field")
+    c_val = cols2[1].selectbox("Культура '26", ["Всі"] + sorted(df_all['Crop2026'].dropna().unique().tolist()) if not df_all.empty else ["Всі"], key="filter_crop")
+
+    def apply_filters(df):
+        if df.empty: return df
+        f_df = df.copy()
+        if search_q:
+            f_df = f_df[f_df['CounterpartyName'].str.lower().str.contains(search_q, na=False) | f_df['CadastralNumber'].str.contains(search_q, na=False)]
+        else:
+            if y_val != "Всі": f_df = f_df[f_df['Рік'] == y_val]
+            if m_val != "Всі": f_df = f_df[f_df['Місяць'] == m_val]
+            if v_val != "Всі": f_df = f_df[f_df['Village'] == v_val]
+            if f_val != "Всі": f_df = f_df[f_df['FieldNumber'] == f_val]
+            if c_val != "Всі": f_df = f_df[f_df['Crop2026'] == c_val]
+        return f_df
+
+    f_new = apply_filters(df_new)
+    f_done_stay = apply_filters(df_done_stay)
+    f_done_out = apply_filters(df_done_out)
+    f_done_res = apply_filters(df_done_res)
+    f_edit = apply_filters(df_edit)
+
+    st.divider()
+
+    # 5 Вкладок
+    tabs = st.tabs([
+        f"🆕 Необроблені ({len(f_new)})", 
+        f"✅ Залишається ({len(f_done_stay)})", 
+        f"❌ Вихід ({len(f_done_out)})", 
+        f"⏸️ Резерв ({len(f_done_res)})", 
+        f"🔓 На редагування ({len(f_edit)})"
+    ])
+    
+    # 1. Нові
+    with tabs[0]:
+        if f_new.empty: st.info("Не знайдено договорів.")
+        for owner, group in f_new.groupby('CounterpartyName'):
+            with st.expander(f"👤 {owner} ({len(group)})"):
+                for _, row in group.iterrows(): render_contract_card(row, row['AgreementUID'], row.get('ContractNumber', 'Б/Н'), owner, "new")
+
+    # 2. Залишається
+    with tabs[1]:
+        if f_done_stay.empty: st.info("Не знайдено договорів.")
+        for owner, group in f_done_stay.groupby('CounterpartyName'):
+            with st.expander(f"👤 {owner} (Залишається: {len(group)})"):
+                for _, row in group.iterrows(): render_contract_card(row, row['AgreementUID'], row.get('ContractNumber', 'Б/Н'), owner, "done")
+
+    # 3. Вихід
+    with tabs[2]:
+        if f_done_out.empty: st.info("Не знайдено договорів.")
+        for owner, group in f_done_out.groupby('CounterpartyName'):
+            with st.expander(f"👤 {owner} (Вихід: {len(group)})"):
+                for _, row in group.iterrows(): render_contract_card(row, row['AgreementUID'], row.get('ContractNumber', 'Б/Н'), owner, "done")
+
+    # 4. Резерв
+    with tabs[3]:
+        if f_done_res.empty: st.info("Не знайдено договорів.")
+        for owner, group in f_done_res.groupby('CounterpartyName'):
+            with st.expander(f"👤 {owner} (Резерв: {len(group)})"):
+                for _, row in group.iterrows(): render_contract_card(row, row['AgreementUID'], row.get('ContractNumber', 'Б/Н'), owner, "done")
+                
+    # 5. Редагування
+    with tabs[4]:
+        if f_edit.empty: st.info("Немає договорів, доступних для редагування.")
+        for owner, group in f_edit.groupby('CounterpartyName'):
+            with st.expander(f"👤 {owner} (Дозволено: {len(group)})"):
+                for _, row in group.iterrows(): render_contract_card(row, row['AgreementUID'], row.get('ContractNumber', 'Б/Н'), owner, "edit")
