@@ -26,8 +26,10 @@ def show_nav():
                 
             if role == 'Admin':
                 st.page_link("pages/0_Адміністрування.py", label="Адміністрування", icon="⚙️")
-                
-            st.markdown("---")
-            if st.button("🚪 Вийти з системи", use_container_width=True):
-                st.session_state.clear()
-                st.rerun()
+
+            if role in ['Landman', 'Admin']:
+                st.page_link("pages/3_Земельник.py", label="Земельна служба", icon="🌍")                
+            #st.markdown("---")
+            #if st.button("🚪 Вийти з системи", use_container_width=True):
+             #   st.session_state.clear()
+             #   st.rerun()
