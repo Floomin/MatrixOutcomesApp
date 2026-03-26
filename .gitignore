@@ -1,0 +1,18 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+venv/
+.env
+
+# Streamlit (САМОЕ ВАЖНОЕ)
+.streamlit/secrets.toml
+
+# VS Code
+.vscode/
+.history/
+
+# MS SQL & OS
+*.log
+Thumbs.db
+Desktop.ini

@@ -1,0 +1,5 @@
+streamlit
+pyodbc
+pandas
+bcrypt
+st-annotated-text
